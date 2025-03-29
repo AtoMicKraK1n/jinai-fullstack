@@ -24,7 +24,7 @@ This project is licensed under the MIT License. See the LICENSE file for details
 For questions or suggestions, feel free to reach out:
 - **Twitter**: [@JinAIhere](https://x.com/JinAIhere)
 - **Email**: prakharsharma2506@gmail.com
-- **Website**: [JinAI](jin-ai-wheat.vercel.app)
+- **Website**: [JinAI](https://jin-ai-wheat.vercel.app/)
 
 
 ---
