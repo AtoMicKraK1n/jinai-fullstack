@@ -57,3 +57,38 @@ pm.test("Set game ID for future tests", function () {
     console.log("Pool ID:", jsonData.game.poolId);
   }
 });
+
+// List available games
+
+pm.test("Status code is 200", function () {
+  pm.response.to.have.status(200);
+});
+
+pm.test("Response has games array", function () {
+  const jsonData = pm.response.json();
+  pm.expect(jsonData).to.have.property("success");
+  pm.expect(jsonData).to.have.property("games");
+  pm.expect(jsonData.games).to.be.an("array");
+});
+
+pm.test("Games have correct structure", function () {
+  const jsonData = pm.response.json();
+  if (jsonData.games.length > 0) {
+    const game = jsonData.games[0];
+    pm.expect(game).to.have.property("id");
+    pm.expect(game).to.have.property("poolId");
+    pm.expect(game).to.have.property("status");
+    pm.expect(game).to.have.property("currentPlayers");
+    pm.expect(game).to.have.property("maxPlayers");
+    pm.expect(game).to.have.property("participants");
+    pm.expect(game.participants).to.be.an("array");
+  }
+});
+
+pm.test("All games are waiting", function () {
+  const jsonData = pm.response.json();
+  jsonData.games.forEach((game) => {
+    pm.expect(game.status).to.equal("WAITING");
+    pm.expect(game.currentPlayers).to.be.lessThan(4);
+  });
+});
