@@ -22,19 +22,50 @@ export async function POST(request: NextRequest) {
     const userId = await verifyToken(request);
     const { poolId, entryFee, maxPlayers = 4 } = await request.json();
 
-    if (!poolId || !entryFee) {
+    if (!entryFee) {
       return NextResponse.json(
-        { error: "Pool ID and entry fee are required" },
+        { error: "Entry fee is required" },
         { status: 400 }
       );
     }
 
-    // Check if game with this poolId already exists
-    const existingGame = await prisma.gameSession.findUnique({
-      where: { poolId },
+    let finalPoolId = poolId;
+
+    // If no poolId provided, try to join an existing waiting game
+    if (!finalPoolId) {
+      const openGame = await prisma.gameSession.findFirst({
+        where: {
+          status: "WAITING",
+          currentPlayers: { lt: maxPlayers },
+          entryFee: parseFloat(entryFee),
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+      });
+
+      if (openGame) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Found existing game to join",
+            redirectToGameId: openGame.id,
+          },
+          { status: 302 } // or 409 if you prefer
+        );
+      }
+
+      // No open game found, generate a new poolId
+      finalPoolId =
+        "pool_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
+    }
+
+    // Ensure no conflict with poolId if provided manually
+    const existingPool = await prisma.gameSession.findUnique({
+      where: { poolId: finalPoolId },
     });
 
-    if (existingGame) {
+    if (existingPool) {
       return NextResponse.json(
         { error: "Game with this pool ID already exists" },
         { status: 400 }
@@ -44,10 +75,10 @@ export async function POST(request: NextRequest) {
     // Create new game session
     const gameSession = await prisma.gameSession.create({
       data: {
-        poolId,
+        poolId: finalPoolId,
         entryFee: parseFloat(entryFee),
         maxPlayers,
-        prizePool: 0, // Will be updated as players join
+        prizePool: 0,
         status: "WAITING",
       },
     });
@@ -60,8 +91,8 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Update player count
-    await prisma.gameSession.update({
+    // Update current players and prize pool
+    const updatedGame = await prisma.gameSession.update({
       where: { id: gameSession.id },
       data: {
         currentPlayers: 1,
@@ -72,13 +103,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       game: {
-        id: gameSession.id,
-        poolId: gameSession.poolId,
-        status: gameSession.status,
-        currentPlayers: 1,
-        maxPlayers: gameSession.maxPlayers,
-        entryFee: gameSession.entryFee,
-        prizePool: gameSession.prizePool,
+        id: updatedGame.id,
+        poolId: updatedGame.poolId,
+        status: updatedGame.status,
+        currentPlayers: updatedGame.currentPlayers,
+        maxPlayers: updatedGame.maxPlayers,
+        entryFee: updatedGame.entryFee,
+        prizePool: updatedGame.prizePool,
       },
     });
   } catch (error) {
@@ -92,12 +123,11 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    // Get all waiting games
     const waitingGames = await prisma.gameSession.findMany({
       where: {
         status: "WAITING",
         currentPlayers: {
-          lt: 4, // Less than max players
+          lt: 4,
         },
       },
       include: {
