@@ -33,7 +33,12 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    console.log("User ID:", userId);
+    console.log("Game ID:", gameId);
+    console.log("Checking participation...");
+
     if (!participant) {
+      console.log("Not a participant:", { userId, gameId });
       return NextResponse.json(
         { error: "You are not a participant in this game" },
         { status: 403 }

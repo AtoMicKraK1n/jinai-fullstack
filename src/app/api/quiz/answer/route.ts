@@ -15,8 +15,12 @@ async function verifyToken(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const userId = await verifyToken(request);
-    const { gameId, questionId, selectedAnswer, responseTime } =
-      await request.json();
+    const {
+      gameId,
+      questionId,
+      selectedAnswer,
+      responseTime = 0,
+    } = await request.json();
 
     if (!gameId || !questionId || !selectedAnswer) {
       return NextResponse.json(
@@ -25,7 +29,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Verify user is in this game
+    // Check participation
     const participant = await prisma.gameParticipant.findFirst({
       where: { gameId, userId },
     });
@@ -37,7 +41,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if user already answered this question
+    // Prevent duplicate answers
     const existingAnswer = await prisma.playerAnswer.findFirst({
       where: { gameId, userId, questionId },
     });
@@ -49,7 +53,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get the correct answer
+    // Check if question exists
     const question = await prisma.question.findUnique({
       where: { id: questionId },
     });
@@ -63,27 +67,38 @@ export async function POST(request: NextRequest) {
 
     const isCorrect = selectedAnswer === question.correctAnswer;
 
-    // Calculate points based on correctness and speed
+    // Points logic
     let points = 0;
     if (isCorrect) {
-      // Base points for correct answer + speed bonus
       const basePoints = 100;
-      const speedBonus = Math.max(0, 50 - Math.floor(responseTime / 1000)); // Bonus decreases with time
+      const speedBonus = Math.max(0, 50 - Math.floor(responseTime / 1000));
       points = basePoints + speedBonus;
     }
 
-    // Save player answer
-    const playerAnswer = await prisma.playerAnswer.create({
+    // Save answer
+    await prisma.playerAnswer.create({
       data: {
         gameId,
         userId,
         questionId,
         selectedAnswer,
         isCorrect,
-        responseTime: responseTime || 0,
+        responseTime,
         points,
       },
     });
+
+    // Update game status from STARTING to IN_PROGRESS
+    const game = await prisma.gameSession.findUnique({
+      where: { id: gameId },
+    });
+
+    if (game && game.status === "STARTING") {
+      await prisma.gameSession.update({
+        where: { id: gameId },
+        data: { status: "IN_PROGRESS" },
+      });
+    }
 
     return NextResponse.json({
       success: true,
