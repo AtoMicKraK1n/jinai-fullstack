@@ -319,8 +319,8 @@ const sampleQuestions = [
 async function main() {
   console.log("🌱 Starting database seed...");
 
-  await prisma.question.deleteMany({});
-  console.log("🗑️  Cleared existing questions");
+  // await prisma.question.deleteMany({});
+  // console.log("🗑️  Cleared existing questions");
 
   for (const questionData of sampleQuestions) {
     await prisma.question.create({ data: questionData });
