@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
+import { calculateAndDistributePrizes } from "@/app/lib/prize";
 
 const prisma = new PrismaClient();
 
@@ -98,6 +99,32 @@ export async function POST(request: NextRequest) {
         where: { id: gameId },
         data: { status: "IN_PROGRESS" },
       });
+    }
+
+    // ✅ AUTO-COMPLETE GAME IF ALL ANSWERS SUBMITTED
+    if (game && game.status !== "COMPLETED") {
+      const totalQuestions = await prisma.question.count();
+      const participants = await prisma.gameParticipant.findMany({
+        where: { gameId },
+      });
+
+      const totalExpectedAnswers = totalQuestions * participants.length;
+
+      const totalAnswersSoFar = await prisma.playerAnswer.count({
+        where: { gameId },
+      });
+
+      if (totalAnswersSoFar >= totalExpectedAnswers) {
+        await prisma.gameSession.update({
+          where: { id: gameId },
+          data: { status: "COMPLETED" },
+        });
+
+        console.log(`✅ Game ${gameId} marked as COMPLETED.`);
+
+        // 🏆 Distribute prizes
+        await calculateAndDistributePrizes(gameId);
+      }
     }
 
     return NextResponse.json({
