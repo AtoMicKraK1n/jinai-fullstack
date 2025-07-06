@@ -8,10 +8,9 @@ export const useGameWebSocket = (gameId: string, token: string) => {
 
   useEffect(() => {
     socketRef.current = io(SOCKET_URL, {
-      transports: ["websocket"], // ensure clean connection
+      transports: ["websocket"],
     });
 
-    // 🧠 Send gameId + token for validation
     socketRef.current.emit("join-game", { gameId, token });
 
     return () => {

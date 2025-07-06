@@ -8,7 +8,6 @@ export function setupSocketServer(io: Server) {
   io.on("connection", (socket: Socket) => {
     console.log(`🔌 Player connected: ${socket.id}`);
 
-    // 🧠 Handle player joining game
     socket.on("join-game", async ({ gameId, token }) => {
       try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
@@ -30,7 +29,6 @@ export function setupSocketServer(io: Server) {
 
         console.log(`🎮 ${participant.user.username} joined game ${gameId}`);
 
-        // Broadcast to others
         io.to(gameId).emit("player-joined", {
           userId,
           username: participant.user.username,
@@ -41,13 +39,11 @@ export function setupSocketServer(io: Server) {
       }
     });
 
-    // 📢 Handle score updates
     socket.on("score-update", (data) => {
       if (!data.gameId) return;
       io.to(data.gameId).emit("score-update", data);
     });
 
-    // ⏳ Countdown per question
     socket.on("send-countdown", ({ gameId, seconds = 10 }) => {
       let timeLeft = seconds;
       const interval = setInterval(() => {
@@ -57,7 +53,6 @@ export function setupSocketServer(io: Server) {
       }, 1000);
     });
 
-    // 🧠 Handle new-question broadcast
     socket.on("send-question", async ({ gameId, questionId }) => {
       const question = await prisma.question.findUnique({
         where: { id: questionId },
@@ -77,7 +72,6 @@ export function setupSocketServer(io: Server) {
       }
     });
 
-    // 🏁 End of game
     socket.on("game-over", ({ gameId, winner }) => {
       io.to(gameId).emit("game-over", {
         message: "🛑 Game Over",
@@ -85,7 +79,6 @@ export function setupSocketServer(io: Server) {
       });
     });
 
-    // 👤 Handle generic player join (e.g. from non-auth HTML)
     socket.on("player-joined", ({ gameId, playerId }) => {
       io.to(gameId).emit("player-joined", {
         playerId,
@@ -93,7 +86,6 @@ export function setupSocketServer(io: Server) {
       });
     });
 
-    // 🚪 Handle disconnection
     socket.on("disconnect", () => {
       console.log(`❌ Player disconnected: ${socket.id}`);
       if (socket.data?.gameId && socket.data?.userId) {
