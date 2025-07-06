@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>🧠 JinAI WebSocket Test</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 2rem;
+      }
+      input,
+      button {
+        margin: 0.2rem;
+      }
+      .log {
+        background: #f0f0f0;
+        padding: 1rem;
+        margin-top: 1rem;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>🧪 JinAI WebSocket Test</h2>
+
+    <label>Game ID: <input type="text" id="gameId" value="game123" /></label>
+    <button onclick="joinGame()">Join Game</button>
+    <br />
+
+    <label>Question ID: <input type="text" id="questionId" value="q1" /></label>
+    <button onclick="sendQuestion()">Send Question</button>
+    <br />
+
+    <label>Score Update: <input type="number" id="score" value="5" /></label>
+    <button onclick="sendScore()">Send Score</button>
+    <br />
+
+    <button onclick="sendCountdown()">Send Countdown</button>
+    <button onclick="sendGameOver()">Send Game Over</button>
+
+    <div class="log" id="log"></div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+      const socket = io("http://localhost:4000");
+      const log = (msg) => {
+        const div = document.createElement("div");
+        div.textContent = msg;
+        document.getElementById("log").appendChild(div);
+      };
+
+      socket.on("connect", () => log("✅ Connected: " + socket.id));
+      socket.on("score-update", (data) =>
+        log("📊 Score update: " + JSON.stringify(data))
+      );
+      socket.on("player-joined", (data) =>
+        log("👤 New player joined: " + JSON.stringify(data))
+      );
+      socket.on("countdown", (data) =>
+        log("⏳ Countdown started: " + data.seconds + "s")
+      );
+      socket.on("game-over", (data) =>
+        log("🏁 Game Over: Winner is " + data.winner)
+      );
+
+      function joinGame() {
+        const gameId = document.getElementById("gameId").value;
+        socket.emit("join-game", gameId);
+        socket.emit("player-joined", { gameId, playerId: socket.id });
+        log("🎮 Joined game: " + gameId);
+      }
+
+      function sendQuestion() {
+        const gameId = document.getElementById("gameId").value;
+        const questionId = document.getElementById("questionId").value;
+        socket.emit("new-question", { gameId, questionId });
+        log(`❓ Sent question (${questionId}) to game ${gameId}`);
+      }
+
+      function sendScore() {
+        const gameId = document.getElementById("gameId").value;
+        const score = parseInt(document.getElementById("score").value);
+        socket.emit("score-update", { gameId, playerId: socket.id, score });
+        log(`📈 Sent score update (${score}) to game ${gameId}`);
+      }
+
+      function sendCountdown() {
+        const gameId = document.getElementById("gameId").value;
+        socket.emit("send-countdown", { gameId, seconds: 10 });
+        log("⏳ Sent countdown start to game " + gameId);
+      }
+
+      function sendGameOver() {
+        const gameId = document.getElementById("gameId").value;
+        socket.emit("game-over", { gameId, winner: socket.id });
+        log("🏁 Sent game over to game " + gameId);
+      }
+    </script>
+  </body>
+</html>

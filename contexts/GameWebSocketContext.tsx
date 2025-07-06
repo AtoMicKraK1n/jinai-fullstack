@@ -4,8 +4,8 @@ import { useGameWebSocket } from "../hooks/useGameWebSocket";
 
 const GameWebSocketContext = createContext<any>(null);
 
-export const GameWebSocketProvider = ({ gameId, children }: any) => {
-  const socket = useGameWebSocket(gameId);
+export const GameWebSocketProvider = ({ gameId, token, children }: any) => {
+  const socket = useGameWebSocket(gameId, token);
   return (
     <GameWebSocketContext.Provider value={socket}>
       {children}

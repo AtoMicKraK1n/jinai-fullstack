@@ -1,6 +1,5 @@
-// server.ts
-import { createServer } from "http";
 import { Server } from "socket.io";
+import { createServer } from "http";
 import { setupSocketServer } from "./src/app/lib/websocket";
 
 const httpServer = createServer();
@@ -10,9 +9,8 @@ const io = new Server(httpServer, {
   },
 });
 
-setupSocketServer(io); // all logic handled in lib/websocket.ts
+setupSocketServer(io);
 
-const PORT = 4000;
-httpServer.listen(PORT, () => {
-  console.log(`✅ WebSocket server running on port ${PORT}`);
+httpServer.listen(4000, () => {
+  console.log("✅ WebSocket server running on port 4000");
 });
