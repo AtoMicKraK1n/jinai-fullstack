@@ -1,54 +1,106 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Connection, PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
-import * as anchor from "@project-serum/anchor";
+import * as anchor from "@coral-xyz/anchor";
 import bs58 from "bs58";
-import idl from "@/app/lib/IDL.json"; // make sure this path is correct
+import idl from "@/app/lib/IDL.json";
+import { JinaiHere } from "@/app/lib/program";
 
-const PROGRAM_ID = new PublicKey(
-  "Hqs1UsDrx9s79o2Jm1z9MZxoVsAb9uAU7YMDgWKAwX7G"
-);
+const PROGRAM_ID = new PublicKey(idl.address);
 const TREASURY_PUBKEY = new PublicKey(
   "GkiKqSVfnU2y4TeUW7up2JS9Z8g1yjGYJ8x2QNf4K6Y"
 );
-const GLOBAL_STATE_SEED = Buffer.from("global-state");
-const POOL_SEED = Buffer.from("pool");
+
+const RPC_URL = process.env.HELIUS_RPC_KEY
+  ? `https://devnet.helius-rpc.com/?api-key=c434b5e0-f58e-4d87-84c1-b7bba03c939f`
+  : "https://api.devnet.solana.com";
 
 export async function POST(req: NextRequest) {
   try {
     const { entryFeeBps, minDeposit, endTime, prizeDistribution } =
       await req.json();
 
-    const connection = new Connection(process.env.RPC_URL!, "confirmed");
+    const connection = new anchor.web3.Connection(RPC_URL, "confirmed");
 
-    // Load in-game wallet from ENV or DB
     const secretKey = bs58.decode(process.env.IN_GAME_WALLET_SECRET!);
     const inGameKeypair = Keypair.fromSecretKey(secretKey);
 
-    const wallet = new anchor.Wallet(inGameKeypair);
-    const provider = new anchor.AnchorProvider(connection, wallet, {});
+    const wallet = {
+      publicKey: inGameKeypair.publicKey,
+      signAllTransactions: async (txs: anchor.web3.Transaction[]) => {
+        return txs.map((tx) => {
+          tx.sign(inGameKeypair);
+          return tx;
+        });
+      },
+      signTransaction: async (tx: anchor.web3.Transaction) => {
+        tx.sign(inGameKeypair);
+        return tx;
+      },
+    };
+
+    const provider = new anchor.AnchorProvider(connection, wallet as any, {
+      preflightCommitment: "confirmed",
+    });
+
     const program = new anchor.Program(
-      idl as unknown as anchor.Idl,
-      PROGRAM_ID,
+      idl as anchor.Idl,
       provider
+    ) as anchor.Program<JinaiHere>;
+
+    const [globalStatePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("global-state")],
+      program.programId
     );
 
-    // Derive global_state PDA
-    const [globalStatePda] = await PublicKey.findProgramAddressSync(
-      [GLOBAL_STATE_SEED],
-      PROGRAM_ID
+    let poolCount = 0;
+    try {
+      const globalStateAccount = await program.account.globalState.fetch(
+        globalStatePda
+      );
+      poolCount = globalStateAccount.poolCount.toNumber();
+    } catch (fetchErr) {
+      console.log("🔄 Global state not found. Calling appointPool...");
+
+      try {
+        await program.methods
+          .appointPool(entryFeeBps)
+          .accountsPartial({
+            globalState: globalStatePda,
+            authority: inGameKeypair.publicKey,
+            treasury: TREASURY_PUBKEY,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        poolCount = 0; // Appointing pool always starts at 0
+      } catch (appointErr) {
+        console.error("❌ appointPool failed:", appointErr);
+        return NextResponse.json(
+          { error: "appointPool failed" },
+          { status: 500 }
+        );
+      }
+    }
+
+    const [poolPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("pool"),
+        Buffer.from(
+          Uint8Array.of(...new anchor.BN(poolCount).toArray("le", 8))
+        ),
+      ],
+      program.programId
     );
 
-    // 1️⃣ Call `appoint_pool` — can skip this if already initialized
     try {
       await program.methods
         .appointPool(entryFeeBps)
-        .accounts({
+        .accountsPartial({
           globalState: globalStatePda,
           authority: inGameKeypair.publicKey,
           treasury: TREASURY_PUBKEY,
           systemProgram: SystemProgram.programId,
         })
-        .rpc();
+        .rpc({ commitment: "confirmed" });
     } catch (err: any) {
       if (
         err.message.includes("already in use") ||
@@ -62,38 +114,30 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Fetch pool_count from global_state
-    const globalStateAccount = await program.account.globalState.fetch(
-      globalStatePda
-    );
-    const poolCount = globalStateAccount.poolCount.toNumber();
-
-    // Derive pool PDA using seed: ["pool", globalState.pool_count]
-    const poolCountBuffer = Buffer.alloc(8);
-    poolCountBuffer.writeBigInt64LE(BigInt(poolCount));
-
-    const [poolPda] = await PublicKey.findProgramAddressSync(
-      [POOL_SEED, poolCountBuffer],
-      PROGRAM_ID
-    );
-
-    // Convert endTime to Unix timestamp
     const endTimestamp = Math.floor(new Date(endTime).getTime() / 1000);
 
-    // 2️⃣ Call `create_pool`
-    await program.methods
-      .createPool(
-        new anchor.BN(minDeposit),
-        new anchor.BN(endTimestamp),
-        prizeDistribution
-      )
-      .accounts({
-        globalState: globalStatePda,
-        pool: poolPda,
-        creator: inGameKeypair.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
+    try {
+      console.log("Calling createPool with:");
+      console.log("minDeposit:", minDeposit);
+      console.log("endTimestamp:", endTimestamp);
+      console.log("prizeDistribution:", prizeDistribution);
+
+      await program.methods
+        .createPool(
+          new anchor.BN(minDeposit),
+          new anchor.BN(endTimestamp),
+          prizeDistribution
+        )
+        .accountsPartial({
+          globalState: globalStatePda,
+          pool: poolPda,
+          creator: inGameKeypair.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc({ commitment: "confirmed" });
+    } catch (err) {
+      console.error("Create pool failed:", err);
+    }
 
     return NextResponse.json({
       success: true,

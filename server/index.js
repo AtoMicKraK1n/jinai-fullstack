@@ -1,16 +1,26 @@
-import { Server, Socket } from "socket.io";
-import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
+const { Server } = require("socket.io");
+const { createServer } = require("http");
+const jwt = require("jsonwebtoken");
+const { PrismaClient } = require("@prisma/client");
 
 const prisma = new PrismaClient();
 
-export function setupSocketServer(io: Server) {
-  io.on("connection", (socket: Socket) => {
+// Create HTTP server and Socket.IO instance
+const httpServer = createServer();
+const io = new Server(httpServer, {
+  cors: {
+    origin: "*",
+  },
+});
+
+// Setup Socket.IO event handlers
+function setupSocketServer(io) {
+  io.on("connection", (socket) => {
     console.log(`🔌 Player connected: ${socket.id}`);
 
     socket.on("join-game", async ({ gameId, token }) => {
       try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
         const userId = decoded.userId;
 
         const participant = await prisma.gameParticipant.findFirst({
@@ -96,3 +106,24 @@ export function setupSocketServer(io: Server) {
     });
   });
 }
+
+// Initialize the socket server
+setupSocketServer(io);
+
+// Start the server
+httpServer.listen(4000, () => {
+  console.log("✅ WebSocket server running on port 4000");
+});
+
+// Graceful shutdown
+process.on("SIGINT", async () => {
+  console.log("🛑 Shutting down server...");
+  await prisma.$disconnect();
+  process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+  console.log("🛑 Shutting down server...");
+  await prisma.$disconnect();
+  process.exit(0);
+});
