@@ -78,6 +78,7 @@ model GameParticipant {
   finalScore    Int         @default(0)
   finalRank     Int?
   prizeWon      Float       @default(0)
+  hasClaimed    Boolean     @default(false)
   
   game          GameSession @relation(fields: [gameId], references: [id])
   user          User        @relation(fields: [userId], references: [id])

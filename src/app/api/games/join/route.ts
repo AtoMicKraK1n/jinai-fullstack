@@ -20,7 +20,7 @@ async function verifyToken(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const userId = "cmcn84w530000vn6icl5er09i";
+    const userId = await verifyToken(request);
     const { gameId } = await request.json();
 
     if (!gameId) {

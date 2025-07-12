@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
+import { PublicKey, SystemProgram, Keypair } from "@solana/web3.js";
+import * as anchor from "@coral-xyz/anchor";
+import bs58 from "bs58";
+import idl from "@/app/lib/IDL.json";
+import { JinaiHere } from "@/app/lib/program";
 
 const prisma = new PrismaClient();
+const PROGRAM_ID = new PublicKey(idl.address);
 
 async function verifyToken(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -25,23 +31,25 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get game results
-    const participants = await prisma.gameParticipant.findMany({
-      where: { gameId },
+    const game = await prisma.gameSession.findUnique({
+      where: { id: gameId },
       include: {
-        user: {
-          select: {
-            id: true,
-            username: true,
-            walletAddress: true,
+        participants: {
+          include: {
+            user: {
+              select: { id: true, username: true, walletAddress: true },
+            },
           },
         },
       },
     });
 
-    // Calculate scores for each participant
+    if (!game)
+      return NextResponse.json({ error: "Game not found" }, { status: 404 });
+
+    // Calculate results
     const results = await Promise.all(
-      participants.map(async (participant) => {
+      game.participants.map(async (participant) => {
         const answers = await prisma.playerAnswer.findMany({
           where: {
             gameId,
@@ -49,13 +57,8 @@ export async function GET(request: NextRequest) {
           },
         });
 
-        const totalScore = answers.reduce(
-          (sum, answer) => sum + answer.points,
-          0
-        );
-        const correctAnswers = answers.filter(
-          (answer) => answer.isCorrect
-        ).length;
+        const totalScore = answers.reduce((sum, a) => sum + a.points, 0);
+        const correctAnswers = answers.filter((a) => a.isCorrect).length;
 
         return {
           userId: participant.userId,
@@ -64,77 +67,139 @@ export async function GET(request: NextRequest) {
           totalScore,
           correctAnswers,
           totalAnswers: answers.length,
-          finalRank: participant.finalRank,
-          prizeWon: participant.prizeWon,
         };
       })
     );
 
-    // Sort by score (highest first)
     results.sort((a, b) => b.totalScore - a.totalScore);
 
-    // Update ranks if not already set
-    const gameSession = await prisma.gameSession.findUnique({
-      where: { id: gameId },
+    const prizeDistribution = { 1: 0.5, 2: 0.2, 3: 0.1, 4: 0.1 };
+    const playerRanks: number[] = [];
+
+    for (let i = 0; i < results.length; i++) {
+      const rank = i + 1;
+      const percentage =
+        prizeDistribution[rank as keyof typeof prizeDistribution] || 0;
+      const prizeAmount = game.prizePool * percentage;
+
+      await prisma.gameParticipant.updateMany({
+        where: { gameId, userId: results[i].userId },
+        data: { finalRank: rank, prizeWon: prizeAmount },
+      });
+
+      playerRanks.push(rank);
+    }
+
+    // -------------------- 🔗 On-chain logic --------------------
+    const poolIndex = game.poolIndex;
+    const RPC_URL = process.env.HELIUS_RPC_KEY
+      ? `https://devnet.helius-rpc.com/?api-key=${process.env.HELIUS_RPC_KEY}`
+      : "https://api.devnet.solana.com";
+
+    const connection = new anchor.web3.Connection(RPC_URL, "confirmed");
+    const secretKey = bs58.decode(process.env.IN_GAME_WALLET_SECRET!);
+    const inGameKeypair = Keypair.fromSecretKey(secretKey);
+
+    const wallet = {
+      publicKey: inGameKeypair.publicKey,
+      signTransaction: async (tx: anchor.web3.Transaction) => {
+        tx.sign(inGameKeypair);
+        return tx;
+      },
+      signAllTransactions: async (txs: anchor.web3.Transaction[]) => {
+        return txs.map((tx) => {
+          tx.sign(inGameKeypair);
+          return tx;
+        });
+      },
+    };
+
+    const provider = new anchor.AnchorProvider(connection, wallet as any, {
+      preflightCommitment: "confirmed",
     });
 
-    if (gameSession?.status === "COMPLETED") {
-      // Game is completed, calculate final prizes
-      await calculateAndDistributePrizes(gameId, results);
-    }
+    const program = new anchor.Program(
+      idl as anchor.Idl,
+      provider
+    ) as anchor.Program<JinaiHere>;
+
+    const [poolPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("pool"),
+        new anchor.BN(poolIndex).toArrayLike(Buffer, "le", 8),
+      ],
+      program.programId
+    );
+
+    const [vaultPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("pool-vault"),
+        new anchor.BN(poolIndex).toArrayLike(Buffer, "le", 8),
+      ],
+      program.programId
+    );
+
+    const [globalStatePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("global-state")],
+      program.programId
+    );
+
+    const playerPDAs = await Promise.all(
+      results.map((r) =>
+        PublicKey.findProgramAddressSync(
+          [
+            Buffer.from("player"),
+            new anchor.BN(poolIndex).toArrayLike(Buffer, "le", 8),
+            new PublicKey(r.walletAddress).toBuffer(),
+          ],
+          program.programId
+        )
+      )
+    );
+
+    // First call: ✅ set_results
+    await program.methods
+      .setResults(playerRanks as [number, number, number, number])
+      .accountsPartial({
+        pool: poolPda,
+        globalState: globalStatePda,
+        authority: inGameKeypair.publicKey,
+        player1: playerPDAs[0][0],
+        player2: playerPDAs[1][0],
+        player3: playerPDAs[2][0],
+        player4: playerPDAs[3][0],
+      })
+      .signers([inGameKeypair])
+      .rpc({ commitment: "confirmed" });
+
+    // Then call: ✅ t_rewards
+    await program.methods
+      .tRewards()
+      .accountsPartial({
+        pool: poolPda,
+        poolVault: vaultPda,
+        globalState: globalStatePda,
+        authority: inGameKeypair.publicKey,
+        treasury: new PublicKey(process.env.TREASURY!),
+        systemProgram: SystemProgram.programId,
+        player1: playerPDAs[0][0],
+        player2: playerPDAs[1][0],
+        player3: playerPDAs[2][0],
+        player4: playerPDAs[3][0],
+      })
+      .signers([inGameKeypair])
+      .rpc({ commitment: "confirmed" });
 
     return NextResponse.json({
       success: true,
+      message: "Results saved and rewards distributed on-chain",
       results,
-      gameStatus: gameSession?.status,
     });
   } catch (error) {
     console.error("Get results error:", error);
     return NextResponse.json(
-      { error: "Failed to get results" },
+      { error: "Failed to get results and distribute rewards" },
       { status: 500 }
     );
-  }
-}
-
-async function calculateAndDistributePrizes(gameId: string, results: any[]) {
-  try {
-    const game = await prisma.gameSession.findUnique({
-      where: { id: gameId },
-    });
-
-    if (!game) return;
-
-    const prizeDistribution = {
-      1: 0.6, // Winner gets 60%
-      2: 0.25, // Second gets 25%
-      3: 0.1, // Third gets 10%
-      4: 0.05, // Fourth gets 5%
-    };
-
-    // Update participant ranks and prizes
-    for (let i = 0; i < results.length; i++) {
-      const rank = i + 1;
-      const prizePercentage =
-        prizeDistribution[rank as keyof typeof prizeDistribution] || 0;
-      const prizeAmount = game.prizePool * prizePercentage;
-
-      await prisma.gameParticipant.updateMany({
-        where: {
-          gameId,
-          userId: results[i].userId,
-        },
-        data: {
-          finalRank: rank,
-          prizeWon: prizeAmount,
-        },
-      });
-    }
-
-    // TODO: Trigger smart contract to distribute prizes
-    // This is where you'll call your Rust smart contract
-    console.log(`Game ${gameId} completed. Triggering prize distribution...`);
-  } catch (error) {
-    console.error("Error calculating prizes:", error);
   }
 }
