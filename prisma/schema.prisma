@@ -49,7 +49,8 @@ model Question {
 // Game Sessions (Quiz Rounds)
 model GameSession {
   id              String        @id @default(cuid())
-  poolId          String        @unique // References to smart contract pools
+  poolId          String        @unique // References to programs pools
+  poolIndex       Int           @default(0)
   status          GameStatus    @default(WAITING)
   maxPlayers      Int           @default(4)
   currentPlayers  Int           @default(0)

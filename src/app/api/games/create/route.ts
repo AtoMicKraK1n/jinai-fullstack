@@ -4,6 +4,7 @@ import * as anchor from "@coral-xyz/anchor";
 import bs58 from "bs58";
 import idl from "@/app/lib/IDL.json";
 import { JinaiHere } from "@/app/lib/program";
+import prisma from "@/app/lib/prisma";
 
 const PROGRAM_ID = new PublicKey(idl.address);
 const TREASURY_PUBKEY = new PublicKey(
@@ -139,11 +140,25 @@ export async function POST(req: NextRequest) {
       console.error("Create pool failed:", err);
     }
 
+    const createdGame = await prisma.gameSession.create({
+      data: {
+        poolId: poolPda.toBase58(), // store PDA, not the number
+        poolIndex: poolCount,
+        status: "WAITING",
+        maxPlayers: 4,
+        currentPlayers: 0,
+        entryFee: minDeposit / 1e9, // assuming lamports, store in SOL
+        prizePool: 0,
+        endTime: new Date(endTime), // ISO string or timestamp
+      },
+    });
+
     return NextResponse.json({
       success: true,
-      message: "Pool created successfully",
+      message: "Pool created and game stored",
       poolAddress: poolPda.toBase58(),
       poolCount,
+      gameId: createdGame.id,
     });
   } catch (err: any) {
     console.error("❌ Error in creating pool:", err);
